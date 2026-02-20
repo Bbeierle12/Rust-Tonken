@@ -1,0 +1,5 @@
+---
+source: tests/metrics_tests.rs
+expression: snapshot
+---
+"token_count: 50\ntps: 20.00\nttft_ms: 50.00\nelapsed_s: 2.50"

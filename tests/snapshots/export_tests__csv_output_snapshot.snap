@@ -1,0 +1,7 @@
+---
+source: tests/export_tests.rs
+expression: output
+---
+session_id,session_title,model,role,content,prompt_tokens,completion_tokens,total_duration_nanos,eval_duration_nanos,tps,ttft_ms,created_at,updated_at
+s1,Test,llama3,user,Hi,0,0,0,0,0.0,0.0,2025-01-01T00:00:00Z,2025-01-01T00:01:00Z
+s1,Test,llama3,assistant,Hello!,0,0,0,0,0.0,0.0,2025-01-01T00:00:00Z,2025-01-01T00:01:00Z

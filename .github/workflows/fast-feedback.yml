@@ -1,0 +1,59 @@
+name: Fast Feedback
+
+on:
+  push:
+    branches: ['**']
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"        # Treat all warnings as errors
+
+jobs:
+  check:
+    name: Format + Lint + Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-fast"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Compile check (no codegen)
+        run: cargo check --all-targets --all-features
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-fast"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - name: Run unit tests
+        run: cargo test --lib -- --test-threads=4
+        timeout-minutes: 3

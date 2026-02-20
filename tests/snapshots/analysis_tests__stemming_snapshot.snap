@@ -1,0 +1,8 @@
+---
+source: tests/analysis_tests.rs
+expression: sorted
+---
+- connect
+- easili
+- jump
+- run

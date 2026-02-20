@@ -1,0 +1,196 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write   # Required to create GitHub Releases
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Validate before building ─────────────────────────────────
+  validate:
+    name: Pre-Release Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-targets --all-features
+        env:
+          PROPTEST_CASES: 1000  # Extra thorough for releases
+      - run: cargo insta test --check
+
+      - name: Verify Cargo.toml version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) != Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+          echo "Version match: $TAG_VERSION"
+
+  # ── Build matrix ─────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: ollama-scope-linux-x86_64
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: ollama-scope-windows-x86_64
+            ext: ".exe"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: ollama-scope-macos-x86_64
+            ext: ""
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: ollama-scope-macos-aarch64
+            ext: ""
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ matrix.target }}"
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: strip target/${{ matrix.target }}/release/ollama-scope${{ matrix.ext }}
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          ARCHIVE_NAME="${{ matrix.artifact }}-${TAG_VERSION}"
+          mkdir -p staging/
+
+          cp target/${{ matrix.target }}/release/ollama-scope${{ matrix.ext }} staging/
+          cp README.md staging/ 2>/dev/null || true
+          cp LICENSE staging/ 2>/dev/null || true
+
+          cd staging/
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            7z a "../${ARCHIVE_NAME}.zip" .
+          else
+            tar czf "../${ARCHIVE_NAME}.tar.gz" .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            *.tar.gz
+            *.zip
+          retention-days: 5
+
+  # ── Create GitHub Release ────────────────────────────────────
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | head -2 | tail -1)
+          CURRENT_TAG="${GITHUB_REF#refs/tags/}"
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --oneline --pretty=format:"- %s" "$CURRENT_TAG")
+          else
+            COMMITS=$(git log --oneline --pretty=format:"- %s" "${PREVIOUS_TAG}..${CURRENT_TAG}")
+          fi
+
+          # Categorize commits
+          FEATURES=$(echo "$COMMITS" | grep "^- feat" | sed 's/^- feat[^:]*: /- /' || true)
+          FIXES=$(echo "$COMMITS" | grep "^- fix" | sed 's/^- fix[^:]*: /- /' || true)
+          OTHER=$(echo "$COMMITS" | grep -v "^- feat\|^- fix" || true)
+
+          {
+            echo "changelog<<EOF"
+            echo "## What's Changed"
+            echo ""
+            if [ -n "$FEATURES" ]; then
+              echo "### Features"
+              echo "$FEATURES"
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+            if [ -n "$OTHER" ]; then
+              echo "### Other"
+              echo "$OTHER"
+              echo ""
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        run: |
+          cd artifacts/
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec sha256sum {} \; > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

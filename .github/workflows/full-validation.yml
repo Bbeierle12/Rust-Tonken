@@ -1,0 +1,172 @@
+name: Full Validation
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ── Tier 1 gates (rerun for PR context) ──────────────────────
+  format-lint:
+    name: Format + Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ── Full test suite ──────────────────────────────────────────
+  test-linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    needs: format-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-full-linux"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - name: Run all tests
+        run: cargo test --all-targets --all-features -- --test-threads=4
+        timeout-minutes: 10
+        env:
+          # Proptest: run more cases in CI than local dev
+          PROPTEST_CASES: 500
+
+      - name: Verify insta snapshots are up to date
+        run: cargo insta test --check
+        # Fails if any snapshots are pending review
+
+  test-windows:
+    name: Tests (Windows)
+    runs-on: windows-latest
+    needs: format-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-full-windows"
+      - name: Run all tests
+        run: cargo test --all-targets --all-features -- --test-threads=4
+        timeout-minutes: 15
+
+  test-macos:
+    name: Tests (macOS)
+    runs-on: macos-latest
+    needs: format-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-full-macos"
+      - name: Run all tests
+        run: cargo test --all-targets --all-features -- --test-threads=4
+        timeout-minutes: 15
+
+  # ── Code coverage ────────────────────────────────────────────
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: format-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate coverage report
+        run: |
+          cargo tarpaulin \
+            --all-features \
+            --workspace \
+            --timeout 300 \
+            --out xml \
+            --out html \
+            --output-dir coverage/ \
+            --skip-clean \
+            --engine llvm
+        env:
+          PROPTEST_CASES: 100
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/cobertura.xml
+          fail_ci_if_error: false   # Advisory, not blocking
+
+      - name: Upload coverage HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(cargo tarpaulin --all-features --workspace --timeout 300 --engine llvm --print-rust-flags 2>&1 | grep -oP '\d+\.\d+(?=% coverage)')
+          echo "Coverage: ${COVERAGE}%"
+          python3 -c "
+          coverage = float('${COVERAGE}')
+          if coverage < 70.0:
+              print(f'FAIL: Coverage {coverage}% is below 70% threshold')
+              exit(1)
+          elif coverage < 80.0:
+              print(f'WARNING: Coverage {coverage}% is below 80% target')
+          else:
+              print(f'PASS: Coverage {coverage}%')
+          "
+
+  # ── Dependency audit ─────────────────────────────────────────
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Update loop performance test ─────────────────────────────
+  performance:
+    name: Performance Regression
+    runs-on: ubuntu-latest
+    needs: test-linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev pkg-config
+
+      - name: Run performance benchmarks
+        run: cargo test --release perf_ -- --test-threads=1
+        # Tests prefixed with perf_ run in release mode
+        # The update loop 1ms budget test lives here
+        timeout-minutes: 5
