@@ -23,7 +23,7 @@ dirs = "5"
 
 [dev-dependencies]
 wiremock = "0.6"
-axum = "0.7"
+axum = "0.8"
 insta = { version = "1", features = ["yaml"] }
 proptest = "1"
 approx = "0.5"
