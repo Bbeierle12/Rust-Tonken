@@ -77,6 +77,7 @@ pub enum Message {
     ConnectionHealthResult(bool),
 
     // UI
+    DismissChatError,
     DismissError,
     KeyboardEvent(iced::keyboard::Key, iced::keyboard::Modifiers),
 

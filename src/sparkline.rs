@@ -1,5 +1,6 @@
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::{mouse, Element, Length, Rectangle, Renderer, Theme};
+use std::collections::VecDeque;
 
 use crate::message::Message;
 use crate::theme;
@@ -7,29 +8,29 @@ use crate::theme;
 /// Rolling data buffer for sparkline display.
 #[derive(Debug, Clone)]
 pub struct SparklineData {
-    pub samples: Vec<f64>,
+    pub samples: VecDeque<f64>,
     pub max_samples: usize,
 }
 
 impl SparklineData {
     pub fn new(max_samples: usize) -> Self {
         Self {
-            samples: Vec::new(),
+            samples: VecDeque::new(),
             max_samples,
         }
     }
 
     /// Push a new sample, trimming old ones beyond max_samples.
     pub fn push(&mut self, value: f64) {
-        self.samples.push(value);
+        self.samples.push_back(value);
         if self.samples.len() > self.max_samples {
-            self.samples.remove(0);
+            self.samples.pop_front();
         }
     }
 
     /// Current (most recent) value, or 0.0 if empty.
     pub fn current(&self) -> f64 {
-        self.samples.last().copied().unwrap_or(0.0)
+        self.samples.back().copied().unwrap_or(0.0)
     }
 
     /// Peak value in the buffer.
@@ -60,7 +61,32 @@ impl canvas::Program<Message> for SparklineProgram {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
 
-        if self.samples.len() < 2 {
+        if self.samples.is_empty() {
+            return vec![frame.into_geometry()];
+        }
+
+        // Single sample: draw a horizontal line and center dot
+        if self.samples.len() == 1 {
+            let val = self.samples[0];
+            let y_max = f64::max(10.0, val * 1.2);
+            let h = bounds.height as f64;
+            let y = (h - (val / y_max) * h) as f32;
+
+            let line = Path::line(
+                iced::Point::new(0.0, y),
+                iced::Point::new(bounds.width, y),
+            );
+            frame.stroke(
+                &line,
+                Stroke::default()
+                    .with_color(self.line_color)
+                    .with_width(1.5),
+            );
+            let dot = Path::circle(
+                iced::Point::new(bounds.width / 2.0, y),
+                3.0,
+            );
+            frame.fill(&dot, self.line_color);
             return vec![frame.into_geometry()];
         }
 
@@ -102,7 +128,7 @@ impl canvas::Program<Message> for SparklineProgram {
             frame.fill(
                 &fill_path,
                 iced::Color {
-                    a: 0.12,
+                    a: 0.18,
                     ..self.line_color
                 },
             );
@@ -152,7 +178,7 @@ mod tests {
             data.push(i as f64);
         }
         assert_eq!(data.samples.len(), 5);
-        assert_eq!(data.samples, vec![5.0, 6.0, 7.0, 8.0, 9.0]);
+        assert_eq!(data.samples, VecDeque::from(vec![5.0, 6.0, 7.0, 8.0, 9.0]));
     }
 
     #[test]

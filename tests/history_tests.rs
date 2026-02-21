@@ -183,3 +183,51 @@ fn test_history_select_on_empty_is_noop() {
     screen.select_prev();
     assert_eq!(screen.selected_index, None);
 }
+
+#[test]
+fn test_history_remove_session() {
+    let mut screen = HistoryScreen::new(test_sessions());
+    assert_eq!(screen.filtered_sessions().len(), 3);
+
+    // Select the second item
+    screen.select_next();
+    screen.select_next();
+    assert_eq!(screen.selected_index, Some(1));
+
+    // Remove a session
+    screen.remove_session("s2");
+    assert_eq!(screen.filtered_sessions().len(), 2);
+    assert!(screen.filtered_sessions().iter().all(|s| s.id != "s2"));
+
+    // Selection should still be valid
+    if let Some(idx) = screen.selected_index {
+        assert!(idx < screen.filtered_sessions().len());
+    }
+}
+
+#[test]
+fn test_history_remove_session_adjusts_selection() {
+    let mut screen = HistoryScreen::new(test_sessions());
+
+    // Select the last item
+    screen.select_next();
+    screen.select_next();
+    screen.select_next(); // index 2
+
+    // Remove session so index 2 would be out of bounds
+    screen.remove_session("s1");
+    // After removal only 2 sessions remain; if selected was 2, should adjust
+    if let Some(idx) = screen.selected_index {
+        assert!(idx < screen.filtered_sessions().len());
+    }
+}
+
+#[test]
+fn test_history_remove_last_session() {
+    let sessions = vec![make_session("s1", "Only", "llama3", 10.0, 100.0, "2025-01-01T00:00:00Z")];
+    let mut screen = HistoryScreen::new(sessions);
+    screen.select_next();
+    screen.remove_session("s1");
+    assert_eq!(screen.filtered_sessions().len(), 0);
+    assert_eq!(screen.selected_index, None);
+}

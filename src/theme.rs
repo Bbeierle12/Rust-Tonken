@@ -177,10 +177,26 @@ pub fn input_style() -> impl Fn(&Theme, text_input::Status) -> text_input::Style
                 radius: 4.0.into(),
             },
             icon: TEXT_MUTED,
-            placeholder: TEXT_MUTED,
+            placeholder: TEXT_SECONDARY,
             value: TEXT_PRIMARY,
             selection: BORDER_FOCUS,
         }
+    }
+}
+
+/// Disabled chat input style (dimmed background, muted text).
+pub fn input_disabled_style() -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
+    move |_theme: &Theme, _status: text_input::Status| text_input::Style {
+        background: iced::Background::Color(BG_ROOT),
+        border: Border {
+            color: BORDER_DEFAULT,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        icon: TEXT_MUTED,
+        placeholder: TEXT_MUTED,
+        value: TEXT_MUTED,
+        selection: BORDER_DEFAULT,
     }
 }
 
@@ -227,6 +243,19 @@ pub fn accent_button_style() -> impl Fn(&Theme, button::Status) -> button::Style
             },
             ..button::Style::default()
         }
+    }
+}
+
+/// Chat message bubble with a colored border accent.
+pub fn message_bubble_style(role_color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_theme: &Theme| container::Style {
+        background: Some(iced::Background::Color(BG_SURFACE)),
+        border: Border {
+            color: role_color,
+            width: 2.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
     }
 }
 

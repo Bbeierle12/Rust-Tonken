@@ -229,6 +229,39 @@ impl OllamaScope {
                 )
             }
 
+            UpdateAction::ComputeAnalysis { left_text, right_text } => {
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let pipeline = ollama_scope::analysis::TextPipeline::new(1);
+                            let set_a = pipeline.process(&left_text);
+                            let set_b = pipeline.process(&right_text);
+                            let shared: std::collections::HashSet<String> =
+                                set_a.intersection(&set_b).cloned().collect();
+                            let left_only: std::collections::HashSet<String> =
+                                set_a.difference(&set_b).cloned().collect();
+                            let right_only: std::collections::HashSet<String> =
+                                set_b.difference(&set_a).cloned().collect();
+                            let union_count = set_a.union(&set_b).count();
+                            let score = if union_count == 0 {
+                                1.0
+                            } else {
+                                shared.len() as f64 / union_count as f64
+                            };
+                            (score, shared, left_only, right_only)
+                        })
+                        .await
+                        .unwrap()
+                    },
+                    |(score, shared, left_only, right_only)| Message::AnalysisResultReady {
+                        score,
+                        shared,
+                        left_only,
+                        right_only,
+                    },
+                )
+            }
+
             UpdateAction::FetchModels(base_url) => {
                 Task::perform(
                     async move {
@@ -273,7 +306,10 @@ impl OllamaScope {
                 .map(|_| Message::ToggleBlink);
             Subscription::batch([keyboard, tick, blink])
         } else {
-            keyboard
+            // When idle: keyboard + periodic health check (30s)
+            let health = iced::time::every(std::time::Duration::from_secs(30))
+                .map(|_| Message::ConnectionHealthCheck);
+            Subscription::batch([keyboard, health])
         }
     }
 }
@@ -292,5 +328,6 @@ fn main() -> iced::Result {
     iced::application("Ollama Scope", OllamaScope::update, OllamaScope::view)
         .subscription(OllamaScope::subscription)
         .theme(|_| iced::Theme::Dark)
+        .window_size(iced::Size::new(1200.0, 800.0))
         .run_with(OllamaScope::new)
 }

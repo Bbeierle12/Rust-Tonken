@@ -1,4 +1,5 @@
 use ollama_scope::sparkline::SparklineData;
+use std::collections::VecDeque;
 
 #[test]
 fn test_sparkline_push_within_capacity() {
@@ -7,7 +8,7 @@ fn test_sparkline_push_within_capacity() {
         data.push(i as f64);
     }
     assert_eq!(data.samples.len(), 5);
-    assert_eq!(data.samples, vec![0.0, 1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(data.samples, VecDeque::from(vec![0.0, 1.0, 2.0, 3.0, 4.0]));
 }
 
 #[test]
@@ -17,7 +18,7 @@ fn test_sparkline_push_exceeds_capacity() {
         data.push(i as f64);
     }
     assert_eq!(data.samples.len(), 3);
-    assert_eq!(data.samples, vec![4.0, 5.0, 6.0]);
+    assert_eq!(data.samples, VecDeque::from(vec![4.0, 5.0, 6.0]));
 }
 
 #[test]

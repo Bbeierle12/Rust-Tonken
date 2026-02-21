@@ -84,7 +84,7 @@ impl App {
             ConnectionStatus::Unknown => theme::TEXT_MUTED,
         };
 
-        let dot = text("\u{25CF}").size(8).color(dot_color); // ● circle
+        let dot = text("\u{25CF}").size(12).color(dot_color); // ● circle
         let model = text(&self.selected_model)
             .size(12)
             .color(theme::TEXT_SECONDARY);
@@ -200,7 +200,7 @@ impl App {
         let hints = match self.screen {
             Screen::SessionList => "Ctrl+N New  |  Ctrl+H History  |  Ctrl+E Export  |  Ctrl+Shift+S Settings",
             Screen::Chat | Screen::NewChat => "Ctrl+Enter Send  |  Esc Cancel/Back  |  Ctrl+N New Chat",
-            Screen::History => "\u{2191}\u{2193} Navigate  |  Enter Open  |  Del Delete  |  / Search  |  s Sort",
+            Screen::History => "\u{2191}\u{2193} Navigate  |  Enter Open  |  Del Delete  |  / Search  |  r Reverse Sort",
             Screen::Analysis => "Tab Cycle Focus  |  Esc Back",
             Screen::Export => "Space Toggle  |  Ctrl+Shift+A Select All  |  Ctrl+Shift+E Export",
             Screen::Settings => "Esc Back",
@@ -238,48 +238,72 @@ impl App {
                     let role_color = theme::role_indicator_color(&msg.role);
                     let role_label = msg.role.to_uppercase();
 
-                    let indicator = container(Space::new(3, Length::Fill))
-                        .style(theme::container_style(role_color, None));
+                    let msg_bubble = container(
+                        column![
+                            text(role_label).size(10).color(role_color),
+                            text(&msg.content).size(14).color(theme::TEXT_PRIMARY),
+                        ]
+                        .spacing(4),
+                    )
+                    .padding([6, 12])
+                    .width(Length::Fill)
+                    .style(theme::message_bubble_style(role_color));
 
-                    let msg_content = column![
-                        text(role_label).size(10).color(role_color),
-                        text(&msg.content).size(14).color(theme::TEXT_PRIMARY),
-                    ]
-                    .spacing(4);
-
-                    let msg_row = row![indicator, msg_content].spacing(12);
-                    messages_col = messages_col.push(msg_row);
+                    messages_col = messages_col.push(msg_bubble);
                 }
 
                 // Streaming content
                 if !chat.streaming_content.is_empty() {
-                    let indicator = container(Space::new(3, Length::Fill))
-                        .style(theme::container_style(theme::ROLE_ASSISTANT, None));
-
                     let cursor = if chat.blink_visible { "\u{2588}" } else { "" };
                     let content = format!("{}{}", chat.streaming_content, cursor);
 
-                    let msg_content = column![
-                        text("ASSISTANT").size(10).color(theme::ROLE_ASSISTANT),
-                        text(content).size(14).color(theme::TEXT_PRIMARY),
-                    ]
-                    .spacing(4);
+                    let msg_bubble = container(
+                        column![
+                            text("ASSISTANT").size(10).color(theme::ROLE_ASSISTANT),
+                            text(content).size(14).color(theme::TEXT_PRIMARY),
+                        ]
+                        .spacing(4),
+                    )
+                    .padding([6, 12])
+                    .width(Length::Fill)
+                    .style(theme::message_bubble_style(theme::ROLE_ASSISTANT));
 
-                    messages_col = messages_col.push(row![indicator, msg_content].spacing(12));
+                    messages_col = messages_col.push(msg_bubble);
                 }
 
-                // Input area
-                let input = text_input("Type a message...", &chat.input)
-                    .on_input(Message::ChatInputChanged)
-                    .on_submit(Message::SendMessage)
-                    .style(theme::input_style())
-                    .size(14)
-                    .width(Length::Fill);
+                // Error banner for chat errors
+                let chat_error_banner: Element<'_, Message> =
+                    if let ChatState::Error(ref err) = chat.state {
+                        container(
+                            row![
+                                text(format!(" {err}"))
+                                    .size(13)
+                                    .color(theme::METRIC_ERROR),
+                                horizontal_space(),
+                                button(text("Dismiss").size(11).color(theme::TEXT_PRIMARY))
+                                    .style(theme::flat_button_style())
+                                    .on_press(Message::DismissChatError),
+                            ]
+                            .spacing(8)
+                            .align_y(iced::Alignment::Center),
+                        )
+                        .padding([4, 24])
+                        .style(theme::error_banner_style())
+                        .width(Length::Fill)
+                        .into()
+                    } else {
+                        Space::new(0, 0).into()
+                    };
 
+                // Input area
                 let mut input_row = Row::new().spacing(8).align_y(iced::Alignment::Center);
 
                 match chat.state {
                     ChatState::Streaming => {
+                        let input = text_input("Streaming...", &chat.input)
+                            .style(theme::input_disabled_style())
+                            .size(14)
+                            .width(Length::Fill);
                         input_row = input_row
                             .push(input)
                             .push(
@@ -289,6 +313,12 @@ impl App {
                             );
                     }
                     _ => {
+                        let input = text_input("Type a message...", &chat.input)
+                            .on_input(Message::ChatInputChanged)
+                            .on_submit(Message::SendMessage)
+                            .style(theme::input_style())
+                            .size(14)
+                            .width(Length::Fill);
                         input_row = input_row
                             .push(input)
                             .push(
@@ -305,6 +335,7 @@ impl App {
 
                 column![
                     scrollable(messages_col).height(Length::Fill),
+                    chat_error_banner,
                     container(column![input_row, send_hint].spacing(4))
                         .padding([12, 24])
                         .style(theme::container_style(theme::BG_SURFACE, None)),
@@ -353,26 +384,26 @@ impl App {
                         .size(11)
                         .color(theme::TEXT_MUTED);
 
-                    let sparkline = crate::sparkline::sparkline_view(&chat.tps_samples);
+                    let tps_vec: Vec<f64> = chat.tps_samples.iter().copied().collect();
+                    let sparkline = crate::sparkline::sparkline_view(&tps_vec);
 
                     let live_stats = column![
                         metric_row("TTFT", &format!("{:.0}ms", ttft), theme::METRIC_TTFT),
                         metric_row("Tokens", &chat.chunk_count.to_string(), theme::METRIC_TOKENS),
                         metric_row("Elapsed", &format!("{:.1}s", elapsed), theme::TEXT_SECONDARY),
-                        metric_row("Chunks", &chat.chunk_count.to_string(), theme::TEXT_SECONDARY),
                     ]
                     .spacing(6);
 
-                    // Projections
-                    let proj_total = if elapsed > 0.0 && tps > 0.0 {
-                        format!("~{:.0} tokens", tps * elapsed * 1.5)
+                    // Current rate summary
+                    let rate_label = if tps > 0.0 {
+                        format!("{} tokens at current rate", chat.chunk_count)
                     } else {
                         "-".to_string()
                     };
 
                     let estimates = column![
-                        text("ESTIMATES").size(10).color(theme::TEXT_MUTED),
-                        metric_row("Projected total", &proj_total, theme::TEXT_SECONDARY),
+                        text("PROGRESS").size(10).color(theme::TEXT_MUTED),
+                        metric_row("Generated", &rate_label, theme::TEXT_SECONDARY),
                     ]
                     .spacing(4);
 
@@ -393,7 +424,8 @@ impl App {
                         .size(32)
                         .color(theme::METRIC_TPS);
 
-                    let sparkline = crate::sparkline::sparkline_view(&chat.tps_samples);
+                    let tps_vec: Vec<f64> = chat.tps_samples.iter().copied().collect();
+                    let sparkline = crate::sparkline::sparkline_view(&tps_vec);
 
                     let eval_tps = if chat.metrics.eval_duration_nanos > 0 {
                         (chat.metrics.completion_tokens as f64)
@@ -610,6 +642,17 @@ impl App {
             .padding([4, 8]);
 
             rows = rows.push(entry);
+        }
+
+        if filtered.is_empty() && !history.search_query.is_empty() {
+            rows = rows.push(
+                container(
+                    text("No sessions match your search")
+                        .size(13)
+                        .color(theme::TEXT_MUTED),
+                )
+                .padding([12, 8]),
+            );
         }
 
         // Footer
@@ -893,16 +936,20 @@ impl App {
                 .spacing(8)
                 .width(Length::FillPortion(1));
 
+                let mut export_btn = button(
+                    text("Export CSV").size(13).color(theme::TEXT_PRIMARY),
+                )
+                .style(theme::accent_button_style());
+                if !export_screen.selected_ids.is_empty() {
+                    export_btn = export_btn.on_press(Message::ExportRequested);
+                }
+
                 let right_panel = column![
                     text("CSV Preview").size(14).color(theme::TEXT_PRIMARY),
                     preview,
                     Space::new(0, 8),
                     text(status_text).size(13).color(status_color),
-                    button(
-                        text("Export CSV").size(13).color(theme::TEXT_PRIMARY),
-                    )
-                    .style(theme::accent_button_style())
-                    .on_press(Message::ExportRequested),
+                    export_btn,
                 ]
                 .spacing(8)
                 .width(Length::FillPortion(1));

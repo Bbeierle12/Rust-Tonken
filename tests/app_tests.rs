@@ -1,6 +1,8 @@
 use ollama_scope::app::{App, Screen, UpdateAction};
 use ollama_scope::message::Message;
+use ollama_scope::screens::chat::ChatState;
 use ollama_scope::screens::history::SortColumn;
+use ollama_scope::screens::loading::StepStatus;
 use ollama_scope::stream::{FinalStreamMetrics, StreamEvent};
 use ollama_scope::types::{ChatMessage, ConnectionStatus, Session, SessionMetrics};
 
@@ -621,7 +623,7 @@ fn test_connection_check_result_failure() {
     app.screen = Screen::Loading;
     app.loading.update_step(0, ollama_scope::screens::loading::StepStatus::Done);
 
-    let action = app.update(Message::ConnectionCheckResult(Err("refused".to_string())));
+    let _action = app.update(Message::ConnectionCheckResult(Err("refused".to_string())));
     assert_eq!(app.connection_status, ConnectionStatus::Disconnected);
     // Should still transition since all steps resolved (even if failed)
     assert!(matches!(app.screen, Screen::SessionList));
@@ -652,4 +654,131 @@ fn test_is_streaming_true_during_stream() {
     chat.update_input("Test".to_string());
     chat.send_message();
     assert!(app.is_streaming());
+}
+
+// ── Phase 1 new tests ──────────────────────────
+
+#[test]
+fn test_export_preview_generated_on_navigate() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToExport);
+    let export = app.export.as_ref().unwrap();
+    // All sessions selected by default → preview should be generated
+    assert!(export.preview.is_some(), "Preview should be generated on navigate");
+}
+
+#[test]
+fn test_export_preview_updates_on_toggle() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToExport);
+
+    // Deselect all → preview should be None
+    app.update(Message::ExportDeselectAll);
+    assert!(app.export.as_ref().unwrap().preview.is_none());
+
+    // Select one → preview should update
+    app.update(Message::ExportToggleSession("s1".to_string()));
+    assert!(app.export.as_ref().unwrap().preview.is_some());
+}
+
+#[test]
+fn test_analysis_auto_triggers_computation() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToAnalysis);
+
+    // Select left session
+    let action = app.update(Message::AnalysisSelectLeft("s1".to_string()));
+    assert!(matches!(action, UpdateAction::None)); // Not ready yet
+
+    // Select right session — should trigger computation
+    let action = app.update(Message::AnalysisSelectRight("s2".to_string()));
+    assert!(
+        matches!(action, UpdateAction::ComputeAnalysis { .. }),
+        "Should trigger ComputeAnalysis when both sessions selected"
+    );
+}
+
+#[test]
+fn test_delete_session_syncs_history() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToHistory);
+
+    let history = app.history.as_ref().unwrap();
+    assert_eq!(history.filtered_sessions().len(), 3);
+
+    // Delete a session
+    app.update(Message::DeleteSession("s1".to_string()));
+
+    let history = app.history.as_ref().unwrap();
+    let filtered = history.filtered_sessions();
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered.iter().all(|s| s.id != "s1"), "Deleted session should not appear in history");
+}
+
+// ── Phase 2 new tests ──────────────────────────
+
+#[test]
+fn test_blink_reset_after_stream_completes() {
+    let mut app = test_app();
+    app.update(Message::NavigateToNewChat);
+
+    // Start streaming
+    let chat = app.chat.as_mut().unwrap();
+    chat.update_input("Hello".to_string());
+    let sid = chat.session_id.clone();
+    app.update(Message::SendMessage);
+
+    // Toggle blink to false
+    app.update(Message::ToggleBlink);
+    assert!(!app.chat.as_ref().unwrap().blink_visible);
+
+    // Complete the stream
+    let event = StreamEvent::Completed {
+        session_id: sid,
+        metrics: FinalStreamMetrics {
+            total_duration: 1_000_000_000,
+            load_duration: 100_000_000,
+            prompt_eval_count: 5,
+            prompt_eval_duration: 500_000_000,
+            eval_count: 10,
+            eval_duration: 400_000_000,
+        },
+    };
+    app.update(Message::StreamEventReceived(event));
+
+    // Blink should be reset to true
+    assert!(app.chat.as_ref().unwrap().blink_visible, "Blink should reset to true after stream completes");
+    assert_eq!(app.chat.as_ref().unwrap().state, ChatState::Idle);
+}
+
+// ── Phase 3 new tests ──────────────────────────
+
+#[test]
+fn test_loading_db_failure_blocks_ready() {
+    let mut app = test_app();
+    app.screen = Screen::Loading;
+
+    // DB fails
+    app.loading.update_step(0, StepStatus::Failed("disk error".to_string()));
+    // Connection and models succeed
+    app.loading.update_step(1, StepStatus::Done);
+    app.loading.update_step(2, StepStatus::Done);
+
+    // Should NOT be ready because DB (step 0) failed
+    assert!(!app.loading.is_ready(), "App should not be ready when DB init failed");
+
+    // Verify the app stays on Loading screen
+    let _action = app.update(Message::ConnectionCheckResult(Ok(vec!["llama3".to_string()])));
+    assert!(matches!(app.screen, Screen::Loading), "Should remain on Loading when DB failed");
+}
+
+// ── Dismiss chat error ──────────────────────────
+
+#[test]
+fn test_dismiss_chat_error() {
+    let mut app = test_app();
+    app.update(Message::NavigateToNewChat);
+    app.chat.as_mut().unwrap().state = ChatState::Error("connection dropped".to_string());
+    app.update(Message::DismissChatError);
+    assert_eq!(app.chat.as_ref().unwrap().state, ChatState::Idle);
 }

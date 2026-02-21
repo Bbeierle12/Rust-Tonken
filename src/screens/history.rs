@@ -43,6 +43,20 @@ impl HistoryScreen {
         screen
     }
 
+    /// Remove a session by ID from both sessions and filtered_ids.
+    pub fn remove_session(&mut self, id: &str) {
+        self.sessions.retain(|s| s.id != id);
+        self.filtered_ids.retain(|fid| fid != id);
+        // Adjust selected_index if it's out of bounds
+        if let Some(idx) = self.selected_index {
+            if self.filtered_ids.is_empty() {
+                self.selected_index = None;
+            } else if idx >= self.filtered_ids.len() {
+                self.selected_index = Some(self.filtered_ids.len() - 1);
+            }
+        }
+    }
+
     /// Update sessions list (e.g. after DB refresh).
     pub fn set_sessions(&mut self, sessions: Vec<Session>) {
         self.sessions = sessions;

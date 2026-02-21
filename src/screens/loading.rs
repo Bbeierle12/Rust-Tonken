@@ -53,10 +53,15 @@ impl LoadingScreen {
         self.models = models;
     }
 
-    /// Check if all steps are done (or failed but non-blocking).
+    /// Check if all steps are resolved. Step 0 (DB) must be Done specifically;
+    /// steps 1-2 (connection/models) can fail gracefully.
     pub fn is_ready(&self) -> bool {
-        self.steps.iter().all(|s| {
-            matches!(s.status, StepStatus::Done | StepStatus::Failed(_))
+        self.steps.iter().enumerate().all(|(i, s)| {
+            if i == 0 {
+                matches!(s.status, StepStatus::Done)
+            } else {
+                matches!(s.status, StepStatus::Done | StepStatus::Failed(_))
+            }
         })
     }
 }

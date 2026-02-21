@@ -72,6 +72,21 @@ impl App {
         Ok(())
     }
 
+    /// Helper: join all messages from a session into a single string for analysis.
+    pub fn session_text(&self, id: &str) -> Option<String> {
+        self.session_list
+            .sessions
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| {
+                s.messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+    }
+
     /// Helper: is the chat currently streaming?
     pub fn is_streaming(&self) -> bool {
         self.chat
@@ -102,7 +117,9 @@ impl App {
             }
             Message::NavigateToExport => {
                 self.screen = Screen::Export;
-                self.export = Some(ExportScreen::new(self.session_list.sessions.clone()));
+                let mut export_screen = ExportScreen::new(self.session_list.sessions.clone());
+                export_screen.generate_preview();
+                self.export = Some(export_screen);
                 UpdateAction::None
             }
             Message::NavigateToSettings => {
@@ -179,6 +196,9 @@ impl App {
             }
             Message::DeleteSession(id) => {
                 self.session_list.delete_session(&id);
+                if let Some(ref mut history) = self.history {
+                    history.remove_session(&id);
+                }
                 UpdateAction::DeleteSession(id)
             }
             Message::RefreshSessions => {
@@ -205,18 +225,21 @@ impl App {
             Message::ExportToggleSession(id) => {
                 if let Some(ref mut export_screen) = self.export {
                     export_screen.toggle_session(&id);
+                    export_screen.generate_preview();
                 }
                 UpdateAction::None
             }
             Message::ExportSelectAll => {
                 if let Some(ref mut export_screen) = self.export {
                     export_screen.select_all();
+                    export_screen.generate_preview();
                 }
                 UpdateAction::None
             }
             Message::ExportDeselectAll => {
                 if let Some(ref mut export_screen) = self.export {
                     export_screen.deselect_all();
+                    export_screen.generate_preview();
                 }
                 UpdateAction::None
             }
@@ -299,12 +322,30 @@ impl App {
             Message::AnalysisSelectLeft(id) => {
                 if let Some(ref mut analysis) = self.analysis_screen {
                     analysis.select_left(id);
+                    if analysis.is_ready() {
+                        let left_id = analysis.left_session_id.as_ref().unwrap().clone();
+                        let right_id = analysis.right_session_id.as_ref().unwrap().clone();
+                        if let (Some(left_text), Some(right_text)) =
+                            (self.session_text(&left_id), self.session_text(&right_id))
+                        {
+                            return UpdateAction::ComputeAnalysis { left_text, right_text };
+                        }
+                    }
                 }
                 UpdateAction::None
             }
             Message::AnalysisSelectRight(id) => {
                 if let Some(ref mut analysis) = self.analysis_screen {
                     analysis.select_right(id);
+                    if analysis.is_ready() {
+                        let left_id = analysis.left_session_id.as_ref().unwrap().clone();
+                        let right_id = analysis.right_session_id.as_ref().unwrap().clone();
+                        if let (Some(left_text), Some(right_text)) =
+                            (self.session_text(&left_id), self.session_text(&right_id))
+                        {
+                            return UpdateAction::ComputeAnalysis { left_text, right_text };
+                        }
+                    }
                 }
                 UpdateAction::None
             }
@@ -413,6 +454,12 @@ impl App {
             }
 
             // ── UI ──────────────────────────────────────────────
+            Message::DismissChatError => {
+                if let Some(ref mut chat) = self.chat {
+                    chat.state = chat::ChatState::Idle;
+                }
+                UpdateAction::None
+            }
             Message::DismissError => {
                 self.error = None;
                 UpdateAction::None
@@ -448,7 +495,6 @@ impl App {
                             Key::Named(Named::Enter) => return self.update(Message::HistoryOpenSelected),
                             Key::Named(Named::Delete) => return self.update(Message::HistoryDeleteSelected),
                             Key::Character(ref c) => match c.as_str() {
-                                "s" if !modifiers.control() => return self.update(Message::HistoryReverseSort),
                                 "r" if !modifiers.control() => return self.update(Message::HistoryReverseSort),
                                 _ => {}
                             }
@@ -530,4 +576,5 @@ pub enum UpdateAction {
     ExportSessions(Vec<Session>),
     FetchModels(String),
     CheckConnection(String),
+    ComputeAnalysis { left_text: String, right_text: String },
 }

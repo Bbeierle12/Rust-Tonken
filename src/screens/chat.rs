@@ -1,6 +1,7 @@
 use crate::metrics::TokenSession;
 use crate::stream::StreamEvent;
 use crate::types::{ChatMessage, OllamaChatRequest, Session, SessionMetrics};
+use std::collections::VecDeque;
 use std::time::Instant;
 
 /// The current state of the streaming process.
@@ -34,7 +35,7 @@ pub struct ChatScreen {
     pub created_at: String,
     pub updated_at: String,
     // Sparkline / streaming UI fields
-    pub tps_samples: Vec<f64>,
+    pub tps_samples: VecDeque<f64>,
     pub blink_visible: bool,
     pub chunk_count: u64,
     pub stream_start: Option<Instant>,
@@ -55,7 +56,7 @@ impl ChatScreen {
             streaming_content: String::new(),
             created_at: now.clone(),
             updated_at: now,
-            tps_samples: Vec::new(),
+            tps_samples: VecDeque::new(),
             blink_visible: true,
             chunk_count: 0,
             stream_start: None,
@@ -75,7 +76,7 @@ impl ChatScreen {
             streaming_content: String::new(),
             created_at: session.created_at,
             updated_at: session.updated_at,
-            tps_samples: Vec::new(),
+            tps_samples: VecDeque::new(),
             blink_visible: true,
             chunk_count: 0,
             stream_start: None,
@@ -149,6 +150,7 @@ impl ChatScreen {
                 });
                 self.streaming_content.clear();
                 self.state = ChatState::Idle;
+                self.blink_visible = true;
 
                 // Update session metrics
                 self.metrics.prompt_tokens += metrics.prompt_eval_count;
@@ -171,6 +173,7 @@ impl ChatScreen {
             StreamEvent::ParseError { .. } => Action::None,
             StreamEvent::ConnectionDropped { error, .. } => {
                 self.state = ChatState::Error(error.clone());
+                self.blink_visible = true;
                 if !self.streaming_content.is_empty() {
                     self.messages.push(ChatMessage {
                         role: "assistant".to_string(),
@@ -183,6 +186,7 @@ impl ChatScreen {
             }
             StreamEvent::Timeout { .. } => {
                 self.state = ChatState::Error("Request timed out".to_string());
+                self.blink_visible = true;
                 self.token_session = None;
                 Action::None
             }
@@ -192,6 +196,7 @@ impl ChatScreen {
     pub fn cancel_stream(&mut self) -> Action {
         if self.state == ChatState::Streaming {
             self.state = ChatState::Idle;
+            self.blink_visible = true;
             if !self.streaming_content.is_empty() {
                 self.messages.push(ChatMessage {
                     role: "assistant".to_string(),
@@ -208,9 +213,9 @@ impl ChatScreen {
 
     /// Record a TPS sample, keeping a rolling window of 60 values.
     pub fn record_tps_sample(&mut self, tps: f64) {
-        self.tps_samples.push(tps);
+        self.tps_samples.push_back(tps);
         if self.tps_samples.len() > 60 {
-            self.tps_samples.remove(0);
+            self.tps_samples.pop_front();
         }
     }
 
