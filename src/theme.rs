@@ -44,6 +44,24 @@ pub const STATUS_CONNECTED: Color = hex(0x3F, 0xB9, 0x50);
 pub const STATUS_DISCONNECTED: Color = hex(0xF8, 0x51, 0x49);
 pub const STATUS_STREAMING: Color = hex(0x58, 0xA6, 0xFF);
 
+// ── Sentiment ────────────────────────────────────
+pub const SENTIMENT_POSITIVE: Color = hex(0x3F, 0xB9, 0x50);
+pub const SENTIMENT_NEGATIVE: Color = hex(0xF8, 0x51, 0x49);
+pub const SENTIMENT_NEUTRAL: Color = hex(0x8B, 0x94, 0x9E);
+
+// ── Emotions ─────────────────────────────────────
+pub const EMOTION_JOY: Color = hex(0xFF, 0xD8, 0x3D);
+pub const EMOTION_ANGER: Color = hex(0xF8, 0x51, 0x49);
+pub const EMOTION_SADNESS: Color = hex(0x58, 0xA6, 0xFF);
+pub const EMOTION_FEAR: Color = hex(0xBC, 0x8C, 0xFF);
+pub const EMOTION_SURPRISE: Color = hex(0xFF, 0x7B, 0x00);
+pub const EMOTION_DISGUST: Color = hex(0x3F, 0xB9, 0x50);
+
+// ── Metric category accents ──────────────────────
+pub const METRIC_LINGUISTIC: Color = hex(0xD2, 0x99, 0x22);
+pub const METRIC_CONVERSATIONAL: Color = hex(0x79, 0xC0, 0xFF);
+pub const METRIC_STYLE: Color = hex(0xF0, 0x88, 0x3E);
+
 // ── Layout dimensions ────────────────────────────
 pub const SIDEBAR_WIDTH: u16 = 220;
 pub const STATUS_BAR_HEIGHT: u16 = 28;

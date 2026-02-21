@@ -37,6 +37,7 @@ fn sample_session(id: &str) -> Session {
             eval_duration_nanos: 500_000_000,
             tps: 25.0,
             ttft_ms: 150.0,
+            ..Default::default()
         },
         created_at: "2025-01-01T00:00:00Z".to_string(),
         updated_at: "2025-01-01T00:01:00Z".to_string(),

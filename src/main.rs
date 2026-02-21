@@ -142,6 +142,85 @@ impl OllamaScope {
                 }
             }
 
+            UpdateAction::SaveSessionAndAnalyze {
+                session,
+                turn_index,
+                user_text,
+                assistant_text,
+                first_assistant_text,
+                previous_assistant_text,
+            } => {
+                let mut tasks = Vec::new();
+
+                // Task 1: Save session to DB
+                if let Some(ref pool) = self.pool {
+                    let pool = Arc::clone(pool);
+                    let sid = session.id.clone();
+                    tasks.push(Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                storage::save_session(&pool, &session)
+                            })
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r.map_err(|e| e.to_string()))
+                        },
+                        move |result| Message::DbSessionSaved(sid.clone(), result),
+                    ));
+                }
+
+                // Task 2: Run content analysis in background
+                let session_id = if let Some(ref chat) = self.app.chat {
+                    chat.session_id.clone()
+                } else {
+                    String::new()
+                };
+
+                tasks.push(Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            ollama_scope::content_analysis::ContentAnalyzer::analyze_turn(
+                                &session_id,
+                                turn_index,
+                                &user_text,
+                                &assistant_text,
+                                &first_assistant_text,
+                                previous_assistant_text.as_deref(),
+                            )
+                        })
+                        .await
+                        .unwrap()
+                    },
+                    move |result| Message::ContentAnalysisReady {
+                        session_id: result.session_id.clone(),
+                        turn_index: result.turn_index,
+                        result: Box::new(result),
+                    },
+                ));
+
+                Task::batch(tasks)
+            }
+
+            UpdateAction::SaveTurnMetrics { session_id, turn_metrics } => {
+                if let Some(ref pool) = self.pool {
+                    let pool = Arc::clone(pool);
+                    let sid = session_id.clone();
+                    Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                storage::save_turn_metrics(&pool, &sid, &turn_metrics)
+                            })
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r.map_err(|e| e.to_string()))
+                        },
+                        move |result| Message::TurnMetricsSaved(session_id.clone(), result),
+                    )
+                } else {
+                    Task::none()
+                }
+            }
+
             UpdateAction::LoadSession(session_id) => {
                 if let Some(ref pool) = self.pool {
                     let pool = Arc::clone(pool);

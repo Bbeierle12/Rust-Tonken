@@ -188,7 +188,7 @@ fn test_stream_completed_triggers_save() {
         },
     };
     let action = app.update(Message::StreamEventReceived(event));
-    assert!(matches!(action, UpdateAction::SaveSession(_)));
+    assert!(matches!(action, UpdateAction::SaveSessionAndAnalyze { .. }));
 }
 
 // ── DB result handling ─────────────────────────

@@ -164,6 +164,21 @@ impl App {
                             chat::Action::SaveSession(session) => {
                                 UpdateAction::SaveSession(session)
                             }
+                            chat::Action::SaveSessionAndAnalyze {
+                                session,
+                                turn_index,
+                                user_text,
+                                assistant_text,
+                                first_assistant_text,
+                                previous_assistant_text,
+                            } => UpdateAction::SaveSessionAndAnalyze {
+                                session,
+                                turn_index,
+                                user_text,
+                                assistant_text,
+                                first_assistant_text,
+                                previous_assistant_text,
+                            },
                             _ => UpdateAction::None,
                         }
                     }
@@ -536,6 +551,64 @@ impl App {
                 UpdateAction::None
             }
 
+            // ── Content analysis results ─────────────────────
+            Message::ContentAnalysisReady { session_id, turn_index, result } => {
+                if let Some(ref mut chat) = self.chat {
+                    if chat.session_id == session_id {
+                        if let Some(turn) = chat.metrics.turn_metrics.get_mut(turn_index) {
+                            // Merge content analysis into the turn metrics
+                            turn.sentiment_score = result.sentiment_score;
+                            turn.user_sentiment_score = result.user_sentiment_score;
+                            turn.dominant_emotion = result.dominant_emotion.clone();
+                            turn.emotion_counts = result.emotion_counts.clone();
+                            turn.emotional_range = result.emotional_range;
+                            turn.reading_level = result.reading_level;
+                            turn.avg_sentence_length = result.avg_sentence_length;
+                            turn.avg_word_length = result.avg_word_length;
+                            turn.type_token_ratio = result.type_token_ratio;
+                            turn.hapax_percentage = result.hapax_percentage;
+                            turn.lexical_density = result.lexical_density;
+                            turn.response_amplification = result.response_amplification;
+                            turn.question_density = result.question_density;
+                            turn.hedging_index = result.hedging_index;
+                            turn.code_density = result.code_density;
+                            turn.list_density = result.list_density;
+                            turn.topic_similarity_prev = result.topic_similarity_prev;
+                            turn.topic_similarity_first = result.topic_similarity_first;
+                            turn.formality_score = result.formality_score;
+                            turn.repetition_index = result.repetition_index;
+                            turn.instructional_density = result.instructional_density;
+                            turn.certainty_score = result.certainty_score;
+
+                            chat.content_analysis_pending = false;
+
+                            let turn_clone = turn.clone();
+                            return UpdateAction::SaveTurnMetrics {
+                                session_id,
+                                turn_metrics: turn_clone,
+                            };
+                        }
+                    }
+                }
+                UpdateAction::None
+            }
+            Message::TurnMetricsSaved(session_id, result) => {
+                if let Err(e) = result {
+                    self.error = Some(format!("Failed to save turn metrics for {session_id}: {e}"));
+                }
+                UpdateAction::None
+            }
+            Message::ToggleMetricsSection(section) => {
+                if let Some(ref mut chat) = self.chat {
+                    if chat.metrics_collapsed.contains(&section) {
+                        chat.metrics_collapsed.remove(&section);
+                    } else {
+                        chat.metrics_collapsed.insert(section);
+                    }
+                }
+                UpdateAction::None
+            }
+
             // ── General ─────────────────────────────────────────
             Message::Tick => {
                 // Update TPS samples during streaming
@@ -570,6 +643,18 @@ pub enum UpdateAction {
     StartStream(crate::types::OllamaChatRequest, String),
     AbortStream,
     SaveSession(Session),
+    SaveSessionAndAnalyze {
+        session: Session,
+        turn_index: usize,
+        user_text: String,
+        assistant_text: String,
+        first_assistant_text: String,
+        previous_assistant_text: Option<String>,
+    },
+    SaveTurnMetrics {
+        session_id: String,
+        turn_metrics: crate::types::TurnMetrics,
+    },
     LoadSession(String),
     DeleteSession(String),
     ListSessions,

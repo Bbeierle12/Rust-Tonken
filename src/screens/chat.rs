@@ -1,7 +1,7 @@
 use crate::metrics::TokenSession;
 use crate::stream::StreamEvent;
-use crate::types::{ChatMessage, OllamaChatRequest, Session, SessionMetrics};
-use std::collections::VecDeque;
+use crate::types::{ChatMessage, OllamaChatRequest, Session, SessionMetrics, TurnMetrics};
+use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
 
 /// The current state of the streaming process.
@@ -18,6 +18,14 @@ pub enum Action {
     None,
     SendRequest(OllamaChatRequest, String),
     SaveSession(Session),
+    SaveSessionAndAnalyze {
+        session: Session,
+        turn_index: usize,
+        user_text: String,
+        assistant_text: String,
+        first_assistant_text: String,
+        previous_assistant_text: Option<String>,
+    },
     CancelStream,
 }
 
@@ -39,6 +47,9 @@ pub struct ChatScreen {
     pub blink_visible: bool,
     pub chunk_count: u64,
     pub stream_start: Option<Instant>,
+    // Content analysis state
+    pub content_analysis_pending: bool,
+    pub metrics_collapsed: HashSet<String>,
 }
 
 impl ChatScreen {
@@ -60,6 +71,8 @@ impl ChatScreen {
             blink_visible: true,
             chunk_count: 0,
             stream_start: None,
+            content_analysis_pending: false,
+            metrics_collapsed: HashSet::new(),
         }
     }
 
@@ -80,6 +93,8 @@ impl ChatScreen {
             blink_visible: true,
             chunk_count: 0,
             stream_start: None,
+            content_analysis_pending: false,
+            metrics_collapsed: HashSet::new(),
         }
     }
 
@@ -143,20 +158,31 @@ impl ChatScreen {
                 Action::None
             }
             StreamEvent::Completed { metrics, .. } => {
+                let assistant_text = self.streaming_content.clone();
+
                 // Finalize the assistant message
                 self.messages.push(ChatMessage {
                     role: "assistant".to_string(),
-                    content: self.streaming_content.clone(),
+                    content: assistant_text.clone(),
                 });
                 self.streaming_content.clear();
                 self.state = ChatState::Idle;
                 self.blink_visible = true;
 
-                // Update session metrics
+                // Update session metrics — including previously discarded fields
                 self.metrics.prompt_tokens += metrics.prompt_eval_count;
                 self.metrics.completion_tokens += metrics.eval_count;
                 self.metrics.total_duration_nanos += metrics.total_duration;
                 self.metrics.eval_duration_nanos += metrics.eval_duration;
+                self.metrics.load_duration_nanos += metrics.load_duration;
+                self.metrics.prompt_eval_duration_nanos += metrics.prompt_eval_duration;
+
+                // Compute wall clock time
+                let wall_clock_ms = self
+                    .stream_start
+                    .map(|s| s.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                self.metrics.total_wall_clock_ms += wall_clock_ms;
 
                 if let Some(ref ts) = self.token_session {
                     let now = Instant::now();
@@ -165,10 +191,69 @@ impl ChatScreen {
                         self.metrics.ttft_ms = ttft;
                     }
                 }
+
+                // Track per-turn histories
+                self.metrics.turn_count += 1;
+                self.metrics.tps_history.push(self.metrics.tps);
+                self.metrics.ttft_history.push(self.metrics.ttft_ms);
+
+                // Build partial TurnMetrics with token/timing data
+                let turn_index = self.metrics.turn_count as usize - 1;
+                let turn = TurnMetrics {
+                    turn_index,
+                    prompt_tokens: metrics.prompt_eval_count,
+                    completion_tokens: metrics.eval_count,
+                    total_duration_nanos: metrics.total_duration,
+                    eval_duration_nanos: metrics.eval_duration,
+                    load_duration_nanos: metrics.load_duration,
+                    prompt_eval_duration_nanos: metrics.prompt_eval_duration,
+                    tps: self.metrics.tps,
+                    ttft_ms: self.metrics.ttft_ms,
+                    wall_clock_ms,
+                    ..TurnMetrics::default()
+                };
+                self.metrics.turn_metrics.push(turn);
+
                 self.token_session = None;
                 self.updated_at = chrono::Utc::now().to_rfc3339();
+                self.content_analysis_pending = true;
 
-                Action::SaveSession(self.to_session())
+                // Gather text for content analysis
+                let user_text = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "user")
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default();
+
+                let first_assistant_text = self
+                    .messages
+                    .iter()
+                    .find(|m| m.role == "assistant")
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default();
+
+                // Previous assistant text (the one before the current one)
+                let assistant_msgs: Vec<&ChatMessage> = self
+                    .messages
+                    .iter()
+                    .filter(|m| m.role == "assistant")
+                    .collect();
+                let previous_assistant_text = if assistant_msgs.len() >= 2 {
+                    Some(assistant_msgs[assistant_msgs.len() - 2].content.clone())
+                } else {
+                    None
+                };
+
+                Action::SaveSessionAndAnalyze {
+                    session: self.to_session(),
+                    turn_index,
+                    user_text,
+                    assistant_text,
+                    first_assistant_text,
+                    previous_assistant_text,
+                }
             }
             StreamEvent::ParseError { .. } => Action::None,
             StreamEvent::ConnectionDropped { error, .. } => {

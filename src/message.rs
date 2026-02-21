@@ -1,3 +1,4 @@
+use crate::content_analysis::ContentAnalysisResult;
 use crate::screens::history::SortColumn;
 use crate::stream::StreamEvent;
 use crate::types::Session;
@@ -80,6 +81,15 @@ pub enum Message {
     DismissChatError,
     DismissError,
     KeyboardEvent(iced::keyboard::Key, iced::keyboard::Modifiers),
+
+    // Content analysis
+    ContentAnalysisReady {
+        session_id: String,
+        turn_index: usize,
+        result: Box<ContentAnalysisResult>,
+    },
+    TurnMetricsSaved(String, Result<(), String>),
+    ToggleMetricsSection(String),
 
     // General
     Tick,

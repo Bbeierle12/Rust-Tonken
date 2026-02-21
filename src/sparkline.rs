@@ -154,17 +154,22 @@ impl canvas::Program<Message> for SparklineProgram {
     }
 }
 
-/// Create a sparkline view element from sample data.
-pub fn sparkline_view(samples: &[f64]) -> Element<'static, Message> {
+/// Create a sparkline view element from sample data with a custom color.
+pub fn sparkline_view_colored(samples: &[f64], color: iced::Color) -> Element<'static, Message> {
     let program = SparklineProgram {
         samples: samples.to_vec(),
-        line_color: theme::METRIC_TPS,
+        line_color: color,
     };
 
     Canvas::new(program)
         .width(Length::Fixed(theme::SPARKLINE_WIDTH))
         .height(Length::Fixed(theme::SPARKLINE_HEIGHT))
         .into()
+}
+
+/// Create a sparkline view element from sample data (default TPS color).
+pub fn sparkline_view(samples: &[f64]) -> Element<'static, Message> {
+    sparkline_view_colored(samples, theme::METRIC_TPS)
 }
 
 #[cfg(test)]
