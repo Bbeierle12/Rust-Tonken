@@ -67,6 +67,80 @@ static IMPERATIVE_VERBS: &[&str] = &[
     "parse", "format", "render", "compile", "debug", "log", "monitor", "track",
 ];
 
+// ── Technical vocabulary for conceptual density ─────
+
+/// Domain-specific terms that are low-syllable but conceptually dense.
+/// FK scores these as "easy" because they're short, but understanding
+/// them requires significant background knowledge.
+static TECHNICAL_TERMS: &[&str] = &[
+    // CS / programming
+    "algorithm", "api", "async", "await", "binary", "boolean", "buffer",
+    "cache", "callback", "closure", "compile", "compiler", "concurrency",
+    "concurrent", "constraint", "context", "crate", "daemon", "deadlock",
+    "debug", "dependency", "deploy", "deserialize", "dispatch", "docker",
+    "endpoint", "enum", "epoch", "exception", "expression", "fiber",
+    "framework", "function", "garbage", "generic", "generics", "graph",
+    "hash", "hashmap", "heap", "heuristic", "http", "https", "idempotent",
+    "immutable", "index", "inheritance", "instance", "interface", "iterator",
+    "json", "kernel", "lambda", "latency", "lifecycle", "lint", "linter",
+    "literal", "macro", "memory", "merge", "metadata", "method", "middleware",
+    "migrate", "migration", "mock", "module", "monad", "monadic", "mutex",
+    "namespace", "node", "null", "nullable", "object", "opaque", "operand",
+    "operator", "optimize", "orm", "overflow", "packet", "parallel",
+    "parameter", "parse", "parser", "payload", "pipeline", "pointer",
+    "polymorphism", "pragma", "predicate", "primitive", "process", "promise",
+    "protocol", "proxy", "query", "queue", "race", "recursion", "recursive",
+    "refactor", "reference", "regex", "registry", "render", "repository",
+    "request", "response", "runtime", "scalar", "schema", "scope",
+    "semaphore", "serialize", "server", "session", "shader", "shard",
+    "singleton", "socket", "stack", "static", "stderr", "stdin", "stdout",
+    "stream", "struct", "subnet", "syntax", "syscall", "template", "tensor",
+    "thread", "throughput", "token", "tokenize", "trait", "transaction",
+    "tuple", "type", "typedef", "unicode", "unix", "variable", "vector",
+    "virtual", "wasm", "webhook", "websocket", "widget",
+    // Math / ML / science
+    "bayesian", "bias", "convex", "convergence", "convolution", "cosine",
+    "dataset", "derivative", "deterministic", "diffusion", "dimension",
+    "distribution", "divergence", "dot", "eigenvalue", "embedding",
+    "entropy", "epoch", "euclidean", "exponential", "factorization",
+    "fourier", "function", "gaussian", "gradient", "graph", "hypothesis",
+    "inference", "integral", "interpolation", "invariant", "inverse",
+    "isomorphism", "jacobian", "kernel", "latent", "linear", "logarithm",
+    "manifold", "markov", "matrix", "metric", "model", "monte",
+    "neural", "norm", "normalize", "objective", "optimization", "orthogonal",
+    "parameter", "perceptron", "permutation", "polynomial", "posterior",
+    "precision", "prior", "probability", "pruning", "quantization",
+    "quaternion", "recall", "regression", "regularization", "relu",
+    "residual", "sampling", "sigmoid", "softmax", "sparse", "spectral",
+    "stochastic", "subspace", "supervised", "tangent", "topology",
+    "transformer", "unsupervised", "variance", "vector",
+];
+
+// ── Reasoning / logical connectors ──────────────────
+
+/// Causal and logical connectors that signal reasoning chain depth.
+/// A high density of these means the text builds arguments, not just
+/// states facts.
+static REASONING_CONNECTORS: &[&str] = &[
+    // Causal
+    "because", "therefore", "thus", "hence", "consequently", "since",
+    "so that", "due to", "owing to", "as a result", "for this reason",
+    "it follows", "leads to", "causes", "implies", "entails",
+    // Contrastive / concessive
+    "however", "although", "nevertheless", "nonetheless", "whereas",
+    "on the other hand", "in contrast", "despite", "even though",
+    "conversely", "yet", "still",
+    // Conditional
+    "if", "unless", "provided that", "assuming", "given that",
+    "in the case", "otherwise",
+    // Additive / elaborative
+    "furthermore", "moreover", "additionally", "in addition",
+    "specifically", "in particular", "namely", "that is",
+    // Summative
+    "in summary", "overall", "in conclusion", "to summarize",
+    "in essence", "fundamentally",
+];
+
 impl ContentAnalyzer {
     /// Analyze a complete turn, producing all metrics.
     pub fn analyze_turn(
@@ -187,15 +261,102 @@ impl ContentAnalyzer {
 
     // ── Linguistic metrics ─────────────────────────────
 
-    /// Flesch-Kincaid grade level.
+    /// Composite reading complexity score.
+    ///
+    /// Replaces the naive Flesch-Kincaid grade level with a multi-signal
+    /// score that accounts for what actually makes LLM output hard to read:
+    ///
+    /// 1. **Surface complexity** (FK on prose only, code blocks stripped)
+    /// 2. **Technical vocabulary density** — domain terms that are short but
+    ///    require background knowledge
+    /// 3. **Reasoning chain density** — causal/logical connectors per
+    ///    sentence, measuring argument depth
+    /// 4. **Vocabulary diversity** (type-token ratio)
+    /// 5. **Lexical density** — ratio of content words to filler
+    ///
+    /// Output is still grade-level-like for familiarity, but far more
+    /// representative of actual comprehension difficulty.
     pub fn reading_level(text: &str) -> f64 {
+        // Strip code blocks — code has its own readability and shouldn't
+        // inflate/deflate prose metrics
+        let prose = strip_code_blocks(text);
+        let prose = prose.trim();
+
+        if prose.is_empty() {
+            return 0.0;
+        }
+
+        // ── 1. Surface complexity (FK on prose only) ───
+        let fk = Self::flesch_kincaid_grade(prose);
+
+        // ── 2. Technical vocabulary density ────────────
+        let tech = Self::technical_density(prose);
+
+        // ── 3. Reasoning chain density ─────────────────
+        let reasoning = Self::reasoning_density(prose);
+
+        // ── 4. Vocabulary diversity (TTR) ──────────────
+        let ttr = Self::type_token_ratio(prose);
+
+        // ── 5. Lexical density ─────────────────────────
+        let lex = Self::lexical_density(prose);
+
+        // ── Composite blend ────────────────────────────
+        // FK provides the base, then the other signals push the score
+        // up when the text is conceptually harder than its surface form
+        // suggests.
+        //
+        // Weights chosen so that:
+        //   - Pure FK still dominates for normal prose
+        //   - A technically dense response with short words gets boosted
+        //   - Heavy reasoning chains add ~1-3 grade levels
+        //   - High vocabulary diversity adds ~0.5-1 grade level
+        //   - High lexical density adds ~0.5-1 grade level
+        let composite = fk
+            + 6.0 * tech          // tech density 0.0-0.15 → +0 to +0.9 grades
+            + 4.0 * reasoning     // reasoning 0.0-1.0 → +0 to +4.0 grades
+            + 1.5 * (ttr - 0.4).max(0.0)   // bonus for diverse vocabulary above baseline
+            + 1.5 * (lex - 0.4).max(0.0);  // bonus for dense content above baseline
+
+        // Clamp to a reasonable range
+        composite.clamp(0.0, 20.0)
+    }
+
+    /// Raw Flesch-Kincaid grade level (used internally by composite score).
+    fn flesch_kincaid_grade(text: &str) -> f64 {
         let sentences = split_sentences(text);
         let sentence_count = sentences.len().max(1) as f64;
         let words: Vec<String> = tokenize(text);
         let word_count = words.len().max(1) as f64;
         let syllable_count: f64 = words.iter().map(|w| count_syllables(w) as f64).sum();
 
-        0.39 * (word_count / sentence_count) + 11.8 * (syllable_count / word_count) - 15.59
+        let grade = 0.39 * (word_count / sentence_count)
+            + 11.8 * (syllable_count / word_count)
+            - 15.59;
+        grade.max(0.0)
+    }
+
+    /// Fraction of words that are domain-specific technical terms.
+    fn technical_density(text: &str) -> f64 {
+        let words = tokenize(text);
+        if words.is_empty() {
+            return 0.0;
+        }
+        let tech_set: HashSet<&str> = TECHNICAL_TERMS.iter().copied().collect();
+        let tech_count = words.iter().filter(|w| tech_set.contains(w.as_str())).count();
+        tech_count as f64 / words.len() as f64
+    }
+
+    /// Reasoning connector occurrences per sentence.
+    /// Higher = more logical/causal argument structure.
+    fn reasoning_density(text: &str) -> f64 {
+        let lower = text.to_lowercase();
+        let sentence_count = split_sentences(text).len().max(1) as f64;
+        let connector_count: f64 = REASONING_CONNECTORS
+            .iter()
+            .map(|phrase| count_occurrences(&lower, phrase) as f64)
+            .sum();
+        connector_count / sentence_count
     }
 
     /// Average words per sentence.
@@ -458,6 +619,33 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Strip fenced code blocks (```...```) from text, returning only prose.
+/// This prevents code tokens from polluting linguistic metrics.
+fn strip_code_blocks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while !remaining.is_empty() {
+        if let Some(start) = remaining.find("```") {
+            // Keep everything before the code fence
+            result.push_str(&remaining[..start]);
+            remaining = &remaining[start + 3..];
+            // Skip to end of code block
+            if let Some(end) = remaining.find("```") {
+                remaining = &remaining[end + 3..];
+            } else {
+                // Unclosed code block — skip the rest
+                break;
+            }
+        } else {
+            result.push_str(remaining);
+            break;
+        }
+    }
+
+    result
+}
+
 /// Split text into sentences on `.`, `!`, `?`.
 fn split_sentences(text: &str) -> Vec<&str> {
     let mut sentences = Vec::new();
@@ -604,6 +792,83 @@ mod tests {
             complex_level > simple_level,
             "Complex text ({complex_level}) should have higher reading level than simple ({simple_level})"
         );
+    }
+
+    #[test]
+    fn test_reading_level_strips_code() {
+        // Code blocks should not inflate reading level
+        let prose_only = "The function processes data. It returns a result.";
+        let prose_with_code = "The function processes data. It returns a result.\n```rust\nfn main() { let x = HashMap::new(); deserialize_struct_from_bytes(&buf); }\n```";
+        let level_prose = ContentAnalyzer::reading_level(prose_only);
+        let level_with_code = ContentAnalyzer::reading_level(prose_with_code);
+        let diff = (level_prose - level_with_code).abs();
+        assert!(
+            diff < 2.0,
+            "Code blocks should not significantly change reading level: prose={level_prose}, with_code={level_with_code}"
+        );
+    }
+
+    #[test]
+    fn test_reading_level_technical_content() {
+        // Technical content with short words should score higher than naive FK would suggest
+        let casual = "I went to the store and bought some food. Then I came home and cooked dinner.";
+        let technical = "The mutex guards the shared hashmap. The thread acquires a semaphore before accessing the buffer. The scheduler dispatches the async callback through the pipeline.";
+        let casual_level = ContentAnalyzer::reading_level(casual);
+        let technical_level = ContentAnalyzer::reading_level(technical);
+        assert!(
+            technical_level > casual_level,
+            "Technical content ({technical_level}) should score higher than casual ({casual_level})"
+        );
+    }
+
+    #[test]
+    fn test_reading_level_reasoning_depth() {
+        // Text with reasoning chains should score higher than flat statements
+        let flat = "The sky is blue. Water is wet. Fire is hot. Ice is cold.";
+        let reasoned = "Because entropy increases in closed systems, therefore the temperature must rise. However, if the system is open, consequently heat can dissipate. Thus equilibrium is reached.";
+        let flat_level = ContentAnalyzer::reading_level(flat);
+        let reasoned_level = ContentAnalyzer::reading_level(reasoned);
+        assert!(
+            reasoned_level > flat_level,
+            "Reasoned text ({reasoned_level}) should score higher than flat ({flat_level})"
+        );
+    }
+
+    #[test]
+    fn test_strip_code_blocks() {
+        let text = "Hello world.\n```rust\nfn main() {}\n```\nGoodbye.";
+        let stripped = strip_code_blocks(text);
+        assert!(!stripped.contains("fn main"), "Code should be removed: {stripped}");
+        assert!(stripped.contains("Hello world"), "Prose before should remain");
+        assert!(stripped.contains("Goodbye"), "Prose after should remain");
+    }
+
+    #[test]
+    fn test_strip_code_blocks_unclosed() {
+        let text = "Start.\n```python\nprint('hello')";
+        let stripped = strip_code_blocks(text);
+        assert!(stripped.contains("Start"), "Prose before unclosed block should remain");
+        assert!(!stripped.contains("print"), "Unclosed code block content should be removed");
+    }
+
+    #[test]
+    fn test_strip_code_blocks_no_code() {
+        let text = "Just regular text with no code at all.";
+        let stripped = strip_code_blocks(text);
+        assert_eq!(stripped, text, "Text without code blocks should pass through unchanged");
+    }
+
+    #[test]
+    fn test_reading_level_empty() {
+        let level = ContentAnalyzer::reading_level("");
+        assert!((level - 0.0).abs() < f64::EPSILON, "Empty text should have 0 reading level");
+    }
+
+    #[test]
+    fn test_reading_level_code_only() {
+        let text = "```rust\nfn main() {\n    println!(\"hello\");\n}\n```";
+        let level = ContentAnalyzer::reading_level(text);
+        assert!((level - 0.0).abs() < f64::EPSILON, "Code-only text should have 0 reading level: {level}");
     }
 
     #[test]
