@@ -1,7 +1,8 @@
 use ollama_scope::app::{App, Screen, UpdateAction};
 use ollama_scope::message::Message;
+use ollama_scope::screens::history::SortColumn;
 use ollama_scope::stream::{FinalStreamMetrics, StreamEvent};
-use ollama_scope::types::{ChatMessage, Session, SessionMetrics};
+use ollama_scope::types::{ChatMessage, ConnectionStatus, Session, SessionMetrics};
 
 fn test_app() -> App {
     App::new()
@@ -20,6 +21,35 @@ fn sample_session(id: &str) -> Session {
         created_at: "2025-01-01T00:00:00Z".to_string(),
         updated_at: "2025-01-01T00:00:00Z".to_string(),
     }
+}
+
+fn sample_session_with_metrics(id: &str, title: &str, model: &str, tps: f64, ttft: f64) -> Session {
+    Session {
+        id: id.to_string(),
+        title: title.to_string(),
+        model: model.to_string(),
+        messages: vec![
+            ChatMessage { role: "user".to_string(), content: "Hello".to_string() },
+            ChatMessage { role: "assistant".to_string(), content: "Hi there".to_string() },
+        ],
+        metrics: SessionMetrics {
+            tps,
+            ttft_ms: ttft,
+            ..SessionMetrics::default()
+        },
+        created_at: "2025-01-01T00:00:00Z".to_string(),
+        updated_at: "2025-01-01T00:00:00Z".to_string(),
+    }
+}
+
+fn app_with_sessions() -> App {
+    let mut app = App::new();
+    app.session_list.set_sessions(vec![
+        sample_session_with_metrics("s1", "Chat about Rust", "llama3", 25.0, 100.0),
+        sample_session_with_metrics("s2", "Python basics", "mistral", 30.0, 80.0),
+        sample_session_with_metrics("s3", "JavaScript tips", "llama3", 20.0, 150.0),
+    ]);
+    app
 }
 
 // ── Screen transitions ──────────────────────────
@@ -306,4 +336,320 @@ fn test_keyboard_escape_navigates_to_session_list() {
     ));
 
     assert!(matches!(app.screen, Screen::SessionList));
+}
+
+// ── New screen navigation ─────────────────────
+
+#[test]
+fn test_navigate_to_history() {
+    let mut app = app_with_sessions();
+    let action = app.update(Message::NavigateToHistory);
+    assert!(matches!(app.screen, Screen::History));
+    assert!(matches!(action, UpdateAction::None));
+    assert!(app.history.is_some());
+}
+
+#[test]
+fn test_navigate_to_analysis() {
+    let mut app = test_app();
+    let action = app.update(Message::NavigateToAnalysis);
+    assert!(matches!(app.screen, Screen::Analysis));
+    assert!(matches!(action, UpdateAction::None));
+    assert!(app.analysis_screen.is_some());
+}
+
+// ── History interactions ──────────────────────
+
+#[test]
+fn test_history_sort_by_column() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToHistory);
+    app.update(Message::HistorySortBy(SortColumn::Tps));
+    let history = app.history.as_ref().unwrap();
+    assert_eq!(history.sort_column, SortColumn::Tps);
+}
+
+#[test]
+fn test_history_search() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToHistory);
+    app.update(Message::HistorySearchChanged("Rust".to_string()));
+    let history = app.history.as_ref().unwrap();
+    let filtered = history.filtered_sessions();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].title, "Chat about Rust");
+}
+
+#[test]
+fn test_history_arrow_navigation() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToHistory);
+
+    // Select first item
+    app.update(Message::HistorySelectNext);
+    assert_eq!(app.history.as_ref().unwrap().selected_index, Some(0));
+
+    // Move down
+    app.update(Message::HistorySelectNext);
+    assert_eq!(app.history.as_ref().unwrap().selected_index, Some(1));
+
+    // Move up
+    app.update(Message::HistorySelectPrev);
+    assert_eq!(app.history.as_ref().unwrap().selected_index, Some(0));
+}
+
+#[test]
+fn test_history_open_selected() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToHistory);
+    app.update(Message::HistorySelectNext);
+
+    let action = app.update(Message::HistoryOpenSelected);
+    assert!(matches!(app.screen, Screen::Chat));
+    assert!(matches!(action, UpdateAction::LoadSession(_)));
+}
+
+#[test]
+fn test_history_reverse_sort() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToHistory);
+    let initial_dir = app.history.as_ref().unwrap().sort_direction;
+    app.update(Message::HistoryReverseSort);
+    assert_ne!(app.history.as_ref().unwrap().sort_direction, initial_dir);
+}
+
+// ── Analysis interactions ─────────────────────
+
+#[test]
+fn test_analysis_select_sessions() {
+    let mut app = test_app();
+    app.update(Message::NavigateToAnalysis);
+    app.update(Message::AnalysisSelectLeft("s1".to_string()));
+    app.update(Message::AnalysisSelectRight("s2".to_string()));
+
+    let analysis = app.analysis_screen.as_ref().unwrap();
+    assert_eq!(analysis.left_session_id, Some("s1".to_string()));
+    assert_eq!(analysis.right_session_id, Some("s2".to_string()));
+    assert!(analysis.is_ready());
+}
+
+#[test]
+fn test_analysis_result_ready() {
+    let mut app = test_app();
+    app.update(Message::NavigateToAnalysis);
+
+    let shared: std::collections::HashSet<String> = ["term1".to_string()].into();
+    let left: std::collections::HashSet<String> = ["left1".to_string()].into();
+    let right: std::collections::HashSet<String> = ["right1".to_string()].into();
+
+    app.update(Message::AnalysisResultReady {
+        score: 0.75,
+        shared: shared.clone(),
+        left_only: left.clone(),
+        right_only: right.clone(),
+    });
+
+    let analysis = app.analysis_screen.as_ref().unwrap();
+    assert_eq!(analysis.similarity_score, Some(0.75));
+    assert_eq!(analysis.shared_terms.len(), 1);
+}
+
+#[test]
+fn test_analysis_cycle_focus() {
+    use ollama_scope::screens::analysis::AnalysisFocus;
+    let mut app = test_app();
+    app.update(Message::NavigateToAnalysis);
+
+    assert_eq!(app.analysis_screen.as_ref().unwrap().focus, AnalysisFocus::LeftPicker);
+    app.update(Message::AnalysisCycleFocus);
+    assert_eq!(app.analysis_screen.as_ref().unwrap().focus, AnalysisFocus::RightPicker);
+    app.update(Message::AnalysisCycleFocus);
+    assert_eq!(app.analysis_screen.as_ref().unwrap().focus, AnalysisFocus::Results);
+    app.update(Message::AnalysisCycleFocus);
+    assert_eq!(app.analysis_screen.as_ref().unwrap().focus, AnalysisFocus::LeftPicker);
+}
+
+// ── Export interactions ───────────────────────
+
+#[test]
+fn test_export_toggle_session() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToExport);
+
+    // All selected by default
+    let export = app.export.as_ref().unwrap();
+    assert_eq!(export.selected_ids.len(), 3);
+
+    // Toggle one off
+    app.update(Message::ExportToggleSession("s1".to_string()));
+    assert_eq!(app.export.as_ref().unwrap().selected_ids.len(), 2);
+
+    // Toggle back on
+    app.update(Message::ExportToggleSession("s1".to_string()));
+    assert_eq!(app.export.as_ref().unwrap().selected_ids.len(), 3);
+}
+
+#[test]
+fn test_export_select_all() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToExport);
+
+    app.update(Message::ExportDeselectAll);
+    assert_eq!(app.export.as_ref().unwrap().selected_ids.len(), 0);
+
+    app.update(Message::ExportSelectAll);
+    assert_eq!(app.export.as_ref().unwrap().selected_ids.len(), 3);
+}
+
+#[test]
+fn test_export_deselect_all() {
+    let mut app = app_with_sessions();
+    app.update(Message::NavigateToExport);
+
+    app.update(Message::ExportDeselectAll);
+    assert!(app.export.as_ref().unwrap().selected_ids.is_empty());
+}
+
+// ── Keyboard shortcuts ───────────────────────
+
+#[test]
+fn test_keyboard_ctrl_h_navigates_to_history() {
+    let mut app = test_app();
+    app.update(Message::KeyboardEvent(
+        iced::keyboard::Key::Character("h".into()),
+        iced::keyboard::Modifiers::CTRL,
+    ));
+    assert!(matches!(app.screen, Screen::History));
+}
+
+#[test]
+fn test_keyboard_ctrl_a_navigates_to_analysis() {
+    let mut app = test_app();
+    app.update(Message::KeyboardEvent(
+        iced::keyboard::Key::Character("a".into()),
+        iced::keyboard::Modifiers::CTRL,
+    ));
+    assert!(matches!(app.screen, Screen::Analysis));
+}
+
+#[test]
+fn test_keyboard_ctrl_1_navigates_to_session_list() {
+    let mut app = test_app();
+    app.update(Message::NavigateToHistory);
+    app.update(Message::KeyboardEvent(
+        iced::keyboard::Key::Character("1".into()),
+        iced::keyboard::Modifiers::CTRL,
+    ));
+    assert!(matches!(app.screen, Screen::SessionList));
+}
+
+// ── Connection health ────────────────────────
+
+#[test]
+fn test_connection_health_check() {
+    let mut app = test_app();
+    let action = app.update(Message::ConnectionHealthCheck);
+    assert!(matches!(action, UpdateAction::CheckConnection(_)));
+    assert_eq!(app.connection_status, ConnectionStatus::Checking);
+}
+
+#[test]
+fn test_connection_health_result_connected() {
+    let mut app = test_app();
+    app.update(Message::ConnectionHealthResult(true));
+    assert_eq!(app.connection_status, ConnectionStatus::Connected);
+}
+
+#[test]
+fn test_connection_health_result_disconnected() {
+    let mut app = test_app();
+    app.update(Message::ConnectionHealthResult(false));
+    assert_eq!(app.connection_status, ConnectionStatus::Disconnected);
+}
+
+// ── Tick and blink ───────────────────────────
+
+#[test]
+fn test_tick_updates_tps_samples_during_streaming() {
+    let mut app = test_app();
+    app.update(Message::NavigateToNewChat);
+
+    // Start streaming
+    let chat = app.chat.as_mut().unwrap();
+    chat.update_input("Hello".to_string());
+    app.update(Message::SendMessage);
+
+    // Tick while streaming
+    let action = app.update(Message::Tick);
+    assert!(matches!(action, UpdateAction::None));
+    // Should have recorded at least one TPS sample
+    assert!(!app.chat.as_ref().unwrap().tps_samples.is_empty());
+}
+
+#[test]
+fn test_blink_toggle() {
+    let mut app = test_app();
+    app.update(Message::NavigateToNewChat);
+
+    let initial = app.chat.as_ref().unwrap().blink_visible;
+    app.update(Message::ToggleBlink);
+    assert_ne!(app.chat.as_ref().unwrap().blink_visible, initial);
+    app.update(Message::ToggleBlink);
+    assert_eq!(app.chat.as_ref().unwrap().blink_visible, initial);
+}
+
+// ── Loading flow ─────────────────────────────
+
+#[test]
+fn test_connection_check_result_success_transitions() {
+    let mut app = test_app();
+    app.screen = Screen::Loading;
+
+    // Mark DB step as done first
+    app.loading.update_step(0, ollama_scope::screens::loading::StepStatus::Done);
+
+    let action = app.update(Message::ConnectionCheckResult(Ok(vec!["llama3".to_string()])));
+    // Loading should be complete, should transition to SessionList
+    assert!(matches!(app.screen, Screen::SessionList));
+    assert!(matches!(action, UpdateAction::ListSessions));
+    assert_eq!(app.connection_status, ConnectionStatus::Connected);
+}
+
+#[test]
+fn test_connection_check_result_failure() {
+    let mut app = test_app();
+    app.screen = Screen::Loading;
+    app.loading.update_step(0, ollama_scope::screens::loading::StepStatus::Done);
+
+    let action = app.update(Message::ConnectionCheckResult(Err("refused".to_string())));
+    assert_eq!(app.connection_status, ConnectionStatus::Disconnected);
+    // Should still transition since all steps resolved (even if failed)
+    assert!(matches!(app.screen, Screen::SessionList));
+}
+
+#[test]
+fn test_loading_complete_navigates_to_session_list() {
+    let mut app = test_app();
+    app.screen = Screen::Loading;
+    let action = app.update(Message::LoadingComplete);
+    assert!(matches!(app.screen, Screen::SessionList));
+    assert!(matches!(action, UpdateAction::ListSessions));
+}
+
+// ── is_streaming helper ──────────────────────
+
+#[test]
+fn test_is_streaming_false_when_idle() {
+    let app = test_app();
+    assert!(!app.is_streaming());
+}
+
+#[test]
+fn test_is_streaming_true_during_stream() {
+    let mut app = test_app();
+    app.update(Message::NavigateToNewChat);
+    let chat = app.chat.as_mut().unwrap();
+    chat.update_input("Test".to_string());
+    chat.send_message();
+    assert!(app.is_streaming());
 }

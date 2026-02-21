@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// Connection status to the Ollama server.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionStatus {
+    Unknown,
+    Connected,
+    Disconnected,
+    Checking,
+}
+
 /// A single chunk from the Ollama streaming chat API (NDJSON line).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaChatChunk {

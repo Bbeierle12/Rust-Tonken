@@ -1,8 +1,9 @@
 use iced::{Element, Subscription, Task};
-use ollama_scope::app::{App, UpdateAction};
+use ollama_scope::app::{App, Screen, UpdateAction};
 use ollama_scope::client::stream_chat;
 use ollama_scope::export::export_sessions;
 use ollama_scope::message::Message;
+use ollama_scope::screens::loading::StepStatus;
 use ollama_scope::storage;
 
 use futures::StreamExt;
@@ -17,6 +18,7 @@ struct OllamaScope {
 impl OllamaScope {
     fn new() -> (Self, Task<Message>) {
         let mut app = App::new();
+        app.screen = Screen::Loading;
 
         // Initialize DB
         let db_path = dirs_db_path();
@@ -24,16 +26,50 @@ impl OllamaScope {
             Ok(pool) => {
                 if let Err(e) = storage::run_migrations(&pool) {
                     app.error = Some(format!("Migration error: {e}"));
+                    app.loading.update_step(0, StepStatus::Failed(e.to_string()));
+                } else {
+                    app.loading.update_step(0, StepStatus::Done);
                 }
                 Some(Arc::new(pool))
             }
             Err(e) => {
                 app.error = Some(format!("DB init error: {e}"));
+                app.loading.update_step(0, StepStatus::Failed(e.to_string()));
                 None
             }
         };
 
-        let init_task = if let Some(ref p) = pool {
+        // Kick off connection check + model fetch
+        let base_url = app.base_url.clone();
+        app.loading.update_step(1, StepStatus::InProgress);
+
+        let connection_task = Task::perform(
+            async move {
+                let url = format!("{base_url}/api/tags");
+                let resp = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+                let body: serde_json::Value =
+                    resp.json().await.map_err(|e| e.to_string())?;
+                let models = body
+                    .get("models")
+                    .and_then(|m| m.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+                            .map(String::from)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(models)
+            },
+            Message::ConnectionCheckResult,
+        );
+
+        // Load font
+        let font_task = iced::font::load(include_bytes!("../assets/JetBrainsMono-Regular.ttf").as_slice())
+            .map(|_| Message::Noop);
+
+        // Load sessions from DB
+        let session_task = if let Some(ref p) = pool {
             let pool = Arc::clone(p);
             Task::perform(
                 async move {
@@ -47,6 +83,8 @@ impl OllamaScope {
         } else {
             Task::none()
         };
+
+        let init_task = Task::batch([connection_task, font_task, session_task]);
 
         (
             Self {
@@ -178,6 +216,19 @@ impl OllamaScope {
                 Message::ExportCompleted,
             ),
 
+            UpdateAction::CheckConnection(base_url) => {
+                Task::perform(
+                    async move {
+                        let url = format!("{base_url}/api/tags");
+                        let resp = reqwest::get(&url).await.map_err(|_| ())?;
+                        let _body: serde_json::Value =
+                            resp.json().await.map_err(|_| ())?;
+                        Ok::<bool, ()>(true)
+                    },
+                    |result| Message::ConnectionHealthResult(result.unwrap_or(false)),
+                )
+            }
+
             UpdateAction::FetchModels(base_url) => {
                 Task::perform(
                     async move {
@@ -208,9 +259,22 @@ impl OllamaScope {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        iced::keyboard::on_key_press(|key, modifiers| {
+        let keyboard = iced::keyboard::on_key_press(|key, modifiers| {
             Some(Message::KeyboardEvent(key, modifiers))
-        })
+        });
+
+        let is_streaming = self.app.is_streaming();
+
+        if is_streaming {
+            // During streaming: keyboard + tick (500ms) + blink (530ms)
+            let tick = iced::time::every(std::time::Duration::from_millis(500))
+                .map(|_| Message::Tick);
+            let blink = iced::time::every(std::time::Duration::from_millis(530))
+                .map(|_| Message::ToggleBlink);
+            Subscription::batch([keyboard, tick, blink])
+        } else {
+            keyboard
+        }
     }
 }
 
@@ -227,5 +291,6 @@ fn dirs_db_path() -> String {
 fn main() -> iced::Result {
     iced::application("Ollama Scope", OllamaScope::update, OllamaScope::view)
         .subscription(OllamaScope::subscription)
+        .theme(|_| iced::Theme::Dark)
         .run_with(OllamaScope::new)
 }

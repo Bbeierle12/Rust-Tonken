@@ -33,6 +33,11 @@ pub struct ChatScreen {
     pub streaming_content: String,
     pub created_at: String,
     pub updated_at: String,
+    // Sparkline / streaming UI fields
+    pub tps_samples: Vec<f64>,
+    pub blink_visible: bool,
+    pub chunk_count: u64,
+    pub stream_start: Option<Instant>,
 }
 
 impl ChatScreen {
@@ -50,6 +55,10 @@ impl ChatScreen {
             streaming_content: String::new(),
             created_at: now.clone(),
             updated_at: now,
+            tps_samples: Vec::new(),
+            blink_visible: true,
+            chunk_count: 0,
+            stream_start: None,
         }
     }
 
@@ -66,6 +75,10 @@ impl ChatScreen {
             streaming_content: String::new(),
             created_at: session.created_at,
             updated_at: session.updated_at,
+            tps_samples: Vec::new(),
+            blink_visible: true,
+            chunk_count: 0,
+            stream_start: None,
         }
     }
 
@@ -98,6 +111,10 @@ impl ChatScreen {
         self.state = ChatState::Streaming;
         self.streaming_content.clear();
         self.token_session = Some(TokenSession::new(Instant::now()));
+        self.tps_samples.clear();
+        self.chunk_count = 0;
+        self.stream_start = Some(Instant::now());
+        self.blink_visible = true;
 
         let request = OllamaChatRequest {
             model: self.model.clone(),
@@ -187,6 +204,19 @@ impl ChatScreen {
         } else {
             Action::None
         }
+    }
+
+    /// Record a TPS sample, keeping a rolling window of 60 values.
+    pub fn record_tps_sample(&mut self, tps: f64) {
+        self.tps_samples.push(tps);
+        if self.tps_samples.len() > 60 {
+            self.tps_samples.remove(0);
+        }
+    }
+
+    /// Toggle the cursor blink state.
+    pub fn toggle_blink(&mut self) {
+        self.blink_visible = !self.blink_visible;
     }
 
     pub fn to_session(&self) -> Session {
